@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # 1. Zookeeper (Required for Kafka & HBase coordination)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - autostream-net
+
+  # 2. Kafka (The Ingestion Pipe)
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      # Listeners for internal (Docker) and external (Host) access
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks:
+      - autostream-net
+
+  # 3. Elasticsearch (Hot Storage / Search)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.10
+    container_name: elasticsearch
+    environment:
+      - node.name=elasticsearch
+      - cluster.name=es-docker-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m" # Limit memory usage
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    networks:
+      - autostream-net
+
+  # 4. Kibana (Visualization UI for Elasticsearch)
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.10
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    environment:
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+    networks:
+      - autostream-net
+
+  # 5. HBase (Cold Storage / History)
+  # Using a standalone pseudo-distributed image for simplicity
+  hbase:
+    image: dajobe/hbase
+    container_name: hbase
+    hostname: hbase
+    ports:
+      - "16010:16010" # Master Web UI
+      - "9090:9090"   # Thrift API (Easier for Python/Java clients in simple setups)
+      - "16000:16000" # Master
+      - "16020:16020" # RegionServer
+    environment:
+      - HBASE_MANAGES_ZK=false # Use our external Zookeeper
+      - HBASE_ZOOKEEPER_QUORUM=zookeeper
+    networks:
+      - autostream-net
+
+networks:
+  autostream-net:
+    driver: bridge
